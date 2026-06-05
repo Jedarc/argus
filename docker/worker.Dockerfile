@@ -9,6 +9,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     wget \
+    unzip \
     && rm -rf /var/lib/apt/lists/*
 
 # Install subfinder binary (projectdiscovery/subfinder)

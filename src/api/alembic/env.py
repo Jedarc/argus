@@ -5,10 +5,7 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from api.database import Base
-
-# Import all models here so Alembic detects them for autogenerate.
-# Add each model module as it is implemented:
-# from api.models import system_config, investigation, target, job, result, module_config  # noqa: F401
+import api.models  # noqa: F401 — registers all models on Base.metadata for autogenerate
 
 config = context.config
 config.set_main_option("sqlalchemy.url", os.environ["DATABASE_URL"])
