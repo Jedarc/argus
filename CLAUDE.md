@@ -118,6 +118,34 @@ feat(ui): add investigation list page
 
 Phases per feature: data model → business logic → API layer → UI → tests → docs.
 
+## Security Architecture
+
+### Key files
+- `src/api/security.py` — **IMPLEMENTED**: JWT creation/validation, bcrypt helpers, `require_authenticated_user` and `require_authenticated_user_ws` dependencies
+- `src/api/validators.py` — **IMPLEMENTED**: `sanitize_target_value()`, `validate_password_strength()`, SSRF-blocking IP list
+- `src/api/main.py` — **IMPLEMENTED**: `SecurityHeadersMiddleware`, CORS, rate limiting, OpenAPI gating
+
+### Rules that must never be broken
+1. **Every router registered on `app` must use `dependencies=[Depends(require_authenticated_user)]`** except `/health` and `/auth/*`
+2. **Every target value from user input must pass through `sanitize_target_value(target_type, value)` before use**
+3. **Subprocess calls in modules must use `shlex.quote()` or list-form args** — never f-string into a shell command
+4. **`password_hash` and `api_key_encrypted` fields must never appear in any Pydantic response schema**
+5. **SSRF**: modules that perform HTTP requests to user-supplied IPs/domains must call `_assert_not_private_ip()` before the request — the validator handles this for stored targets but modules must also guard direct calls
+6. **CORS `ALLOWED_ORIGINS` must be set explicitly in `.env`** — the default `http://localhost:3000` is for local dev only
+
+### Auth dependency usage
+```python
+# Protect an entire router:
+app.include_router(router, dependencies=[Depends(require_authenticated_user)])
+
+# Protect a single endpoint:
+@router.get("/endpoint", dependencies=[Depends(require_authenticated_user)])
+
+# WebSocket (token passed as ?token=<jwt> query param):
+from api.security import require_authenticated_user_ws
+require_authenticated_user_ws(token=token, database_session=session)
+```
+
 ## Code Conventions
 
 - **No abbreviations**: `target_value` not `val`, `database_session` not `db`, `api_key` not `key`

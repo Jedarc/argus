@@ -113,14 +113,40 @@ All existing JWTs embed the version at issue time — mismatches are rejected im
 
 ## Security
 
-- Single-user auth: bcrypt-hashed password in `system_config`, JWT sessions
-- JWT stored in httpOnly + Secure + SameSite=Strict cookie (XSS-safe)
-- Token invalidation via `token_version` counter (no token blocklist needed)
-- API keys stored with Fernet symmetric encryption — never in plaintext
-- Module API keys never returned to the frontend (`configured: true/false` only)
-- `.env` excluded from version control (`.gitignore`)
+### Authentication
+- Single-user: bcrypt-hashed password in `system_config`, JWT sessions
+- JWT in httpOnly + Secure + SameSite=Strict cookie — XSS cannot read it
+- Token invalidation via `token_version` counter — no blocklist needed
+- `/auth/setup` returns 404 after first use — endpoint effectively disappears
+- All credential errors return the same generic message — no user enumeration
+- Login rate-limited to 10 attempts/minute per IP (slowapi)
+
+### Input Validation (`src/api/validators.py`)
+- Every target value passes through `sanitize_target_value()` before persistence or module execution
+- Per-type validation: email regex, IP address parsing, domain RFC 1123, username ASCII printable, phone E.164
+- **SSRF protection**: private/loopback/reserved IP ranges (RFC 1918, 1700, 3927, etc.) are blocked for `ip` and `domain` targets
+- Domains must not include protocol prefix, paths, or credentials
+- Password strength enforced at setup and change-password: min 12 chars, upper + lower + digit + special
+
+### Transport and Headers (`src/api/main.py`)
+- CORS restricted to explicit `ALLOWED_ORIGINS` — never wildcard
+- Only `GET POST PUT DELETE` methods allowed; `Content-Type` and `Authorization` headers only
+- `SecurityHeadersMiddleware` sets on every response:
+  - `X-Content-Type-Options: nosniff`
+  - `X-Frame-Options: DENY`
+  - `X-XSS-Protection: 1; mode=block`
+  - `Referrer-Policy: no-referrer`
+  - `Content-Security-Policy: default-src 'self'` (tightened per resource type)
+  - `Cache-Control: no-store, no-cache, must-revalidate, private` — prevents proxies and browsers from caching investigation results
+  - `Permissions-Policy: geolocation=(), microphone=(), camera=()`
+- OpenAPI docs (`/docs`, `/openapi.json`) disabled in production (`DEBUG=false`)
+- Global rate limit: 200 requests/minute per IP across all endpoints
+
+### Data Protection
+- Module API keys stored with Fernet symmetric encryption — never returned to the frontend
+- `system_config` password hash never included in any API response
 - All containers run as non-root (`USER app`)
-- Input validated at API boundaries (Pydantic models)
+- `.env` excluded from version control
 
 ## Directory Structure
 
