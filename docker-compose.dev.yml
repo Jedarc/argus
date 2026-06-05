@@ -1,5 +1,6 @@
 services:
   api:
+    container_name: argus-api
     build:
       context: .
       dockerfile: docker/api.Dockerfile
@@ -9,6 +10,7 @@ services:
     command: sh -c "alembic -c api/alembic.ini upgrade head && uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload"
     environment:
       DEBUG: "true"
+      LOG_LEVEL: "DEBUG"
     deploy:
       resources:
         limits:
@@ -16,13 +18,14 @@ services:
           memory: 768M
 
   worker:
+    container_name: argus-worker
     build:
       context: .
       dockerfile: docker/worker.Dockerfile
       target: development
     volumes:
       - ./src/api:/app/api
-    command: celery -A api.tasks worker --loglevel=info
+    command: celery -A api.tasks worker --loglevel=debug --queues=argus.default,argus.dlq
     deploy:
       resources:
         limits:
@@ -34,6 +37,7 @@ services:
         hard: 512
 
   ui:
+    container_name: argus-ui
     build:
       context: .
       dockerfile: docker/ui.Dockerfile

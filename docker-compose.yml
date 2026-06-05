@@ -1,5 +1,6 @@
 services:
   postgres:
+    container_name: argus-postgres
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
@@ -7,7 +8,9 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - argus-postgres-data:/var/lib/postgresql/data
+    networks:
+      - argus-network
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
@@ -27,16 +30,21 @@ services:
         hard: 4096
 
   redis:
+    container_name: argus-redis
     image: redis:7-alpine
     restart: unless-stopped
-    # Enforce a hard memory ceiling so Redis does not silently grow unbounded.
-    # maxmemory-policy allkeys-lru evicts least-recently-used keys when the
-    # limit is reached — appropriate for a cache/broker workload.
+    # Two Redis databases used:
+    #   /1 — Celery broker (task queue)
+    #   /2 — Celery result backend
+    # Prefixing all keys and using named DBs prevents collisions when
+    # this Redis instance is shared or accessible from other services.
     command: >
       redis-server
       --maxmemory 128mb
       --maxmemory-policy allkeys-lru
       --save ""
+    networks:
+      - argus-network
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -52,6 +60,7 @@ services:
           memory: 64M
 
   api:
+    container_name: argus-api
     build:
       context: .
       dockerfile: docker/api.Dockerfile
@@ -60,6 +69,8 @@ services:
     env_file: .env
     ports:
       - "8000:8000"
+    networks:
+      - argus-network
     depends_on:
       postgres:
         condition: service_healthy
@@ -84,12 +95,15 @@ services:
         hard: 8192
 
   worker:
+    container_name: argus-worker
     build:
       context: .
       dockerfile: docker/worker.Dockerfile
       target: production
     restart: unless-stopped
     env_file: .env
+    networks:
+      - argus-network
     depends_on:
       postgres:
         condition: service_healthy
@@ -97,8 +111,6 @@ services:
         condition: service_healthy
     deploy:
       resources:
-        # Workers spawn subprocess tools (Sherlock, Holehe, Subfinder) which
-        # can be memory and CPU intensive when running concurrently.
         limits:
           cpus: "2.0"
           memory: 1G
@@ -109,12 +121,12 @@ services:
       nofile:
         soft: 4096
         hard: 8192
-      # Prevent runaway subprocess forks from exhausting the host PID table.
       nproc:
         soft: 256
         hard: 512
 
   ui:
+    container_name: argus-ui
     build:
       context: .
       dockerfile: docker/ui.Dockerfile
@@ -122,6 +134,8 @@ services:
     restart: unless-stopped
     ports:
       - "3000:80"
+    networks:
+      - argus-network
     depends_on:
       - api
     deploy:
@@ -133,5 +147,11 @@ services:
           cpus: "0.05"
           memory: 32M
 
+networks:
+  argus-network:
+    name: argus-network
+    driver: bridge
+
 volumes:
-  postgres_data:
+  argus-postgres-data:
+    name: argus-postgres-data
