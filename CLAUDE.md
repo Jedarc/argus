@@ -25,14 +25,16 @@ The following are fully defined and ready:
 - `docker-compose.yml` + `docker-compose.dev.yml` + `Makefile`
 
 **What needs to be built next (in order):**
-1. SQLAlchemy models (`src/api/models/`)
+1. SQLAlchemy models (`src/api/models/`) — including `system_config`
 2. Alembic migrations (`alembic init`, initial migration)
-3. Module implementations (`src/api/modules/*.py`)
-4. Celery task for module execution (`src/api/tasks.py`)
-5. FastAPI routers (`src/api/routers/`)
-6. WebSocket progress hub (`src/api/routers/ws.py`)
-7. React UI (`src/ui/`)
-8. Dockerfiles (`docker/`)
+3. Auth implementation (`src/api/routers/auth.py`) — bcrypt + JWT + cookie
+4. `require_authenticated_user` FastAPI dependency
+5. Module implementations (`src/api/modules/*.py`)
+6. Celery task for module execution (`src/api/tasks.py`)
+7. FastAPI routers (`src/api/routers/`)
+8. WebSocket progress hub (`src/api/routers/ws.py`)
+9. React UI (`src/ui/`) — including `/setup` and `/login` pages
+10. Dockerfiles (`docker/`)
 
 ## Tech Stack
 
@@ -62,9 +64,28 @@ class BaseModule(ABC):
 
 All modules are registered in `src/api/modules/__init__.py` as `ALL_MODULES`.
 
+## Authentication
+
+Single-user, password-only. Designed for self-hosted VPS deployments.
+
+**Flow:**
+1. First request to any protected route → `403 {"setup_required": true}` if no password is set
+2. UI redirects to `/setup` → `POST /auth/setup` stores bcrypt hash in `system_config` → disabled forever after
+3. `POST /auth/login {"password": "..."}` → JWT returned as httpOnly + Secure + SameSite=Strict cookie
+4. FastAPI dependency `require_authenticated_user` guards all routes except `/health`, `/auth/*`
+5. WebSocket auth via `?token=<jwt>` query param (httpOnly cookie not available on WS upgrade)
+6. Password change increments `token_version` in `system_config` → all existing tokens immediately invalid
+
+**Key:** `JWT_SECRET_KEY` in `.env` (never hardcode). `JWT_EXPIRY_HOURS` controls session length.
+
+**Files:**
+- `src/api/routers/auth.py` — all auth endpoints (stubs, raise NotImplementedError)
+- `src/api/models/system_config.py` — stores `password_hash` and `token_version` rows
+
 ## Data Model
 
 ```
+system_config   (key PK, value, updated_at)           ← password_hash, token_version
 investigations  (id, name, notes, status, created_at)
 targets         (id, investigation_id, type, value)
 jobs            (id, investigation_id, target_id, module, status, started_at, finished_at, error)

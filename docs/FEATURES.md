@@ -2,6 +2,41 @@
 
 > *Nothing escapes the many eyes.*
 
+## Authentication
+
+Argus uses a **single-user, password-only** model — designed for self-hosted VPS deployments
+where only one person needs access.
+
+### First-run setup
+
+- On startup, the API checks whether a password has been configured (`system_config` table)
+- If no password is set, every protected request returns `HTTP 403` with `{"setup_required": true}`
+- The UI detects this and redirects to `/setup` before rendering anything else
+- The setup page accepts a password + confirmation and stores the bcrypt hash in the database
+- Once configured, the setup endpoint is permanently disabled
+
+### Login
+
+- `POST /auth/login` accepts `{"password": "..."}` and returns a signed JWT
+- The token is stored in an **httpOnly, Secure, SameSite=Strict** cookie — never in localStorage
+- Default session duration: 24 hours (configurable via `JWT_EXPIRY_HOURS`)
+- All API routes except `/health`, `/auth/login`, and `/auth/setup` require a valid token
+- WebSocket connections authenticate via `?token=<jwt>` query parameter (cookies are not accessible in WS upgrades)
+
+### Password change
+
+- `POST /auth/change-password` requires the current password before accepting a new one
+- Immediately invalidates all existing tokens by rotating a per-user `token_version` counter stored in `system_config`
+
+### Environment variables
+
+| Variable | Purpose |
+|----------|---------|
+| `JWT_SECRET_KEY` | Signs JWT tokens — must be a random secret, never reused |
+| `JWT_EXPIRY_HOURS` | Token lifetime in hours (default: `24`) |
+
+---
+
 ## Investigations
 
 - Create named investigations with one or multiple targets

@@ -52,6 +52,7 @@ result            │
 ## Data Model (simplified)
 
 ```sql
+system_config    -- key (PK), value, updated_at          ← password_hash, token_version
 investigations   -- id, name, notes, status, created_at, updated_at
 targets          -- id, investigation_id, type, value
 jobs             -- id, investigation_id, target_id, module, status, started_at, finished_at, error
@@ -78,10 +79,45 @@ Adding a new module requires only:
 
 The system auto-discovers registered modules and exposes them in the settings panel.
 
+## Authentication Flow
+
+```
+First run (no password configured)
+        │
+        ▼
+Any protected request → 403 {"setup_required": true}
+        │
+        ▼
+UI redirects to /setup
+        │
+        ▼
+POST /auth/setup {"password": "..."}
+→ bcrypt hash stored in system_config
+→ setup endpoint permanently disabled
+        │
+        ▼
+Subsequent requests
+        │
+POST /auth/login {"password": "..."}
+→ verify bcrypt hash
+→ return signed JWT in httpOnly cookie
+        │
+        ▼
+FastAPI dependency require_authenticated_user
+→ validates JWT on every protected route
+→ WebSocket auth via ?token=<jwt> query param
+```
+
+**Token invalidation:** changing the password increments `token_version` in `system_config`.
+All existing JWTs embed the version at issue time — mismatches are rejected immediately.
+
 ## Security
 
+- Single-user auth: bcrypt-hashed password in `system_config`, JWT sessions
+- JWT stored in httpOnly + Secure + SameSite=Strict cookie (XSS-safe)
+- Token invalidation via `token_version` counter (no token blocklist needed)
 - API keys stored with Fernet symmetric encryption — never in plaintext
-- Keys are never returned to the frontend (`configured: true/false` only)
+- Module API keys never returned to the frontend (`configured: true/false` only)
 - `.env` excluded from version control (`.gitignore`)
 - All containers run as non-root (`USER app`)
 - Input validated at API boundaries (Pydantic models)
@@ -96,6 +132,7 @@ argus/
 │   │   ├── database.py
 │   │   ├── tasks.py
 │   │   ├── routers/
+│   │   │   ├── auth.py
 │   │   │   ├── investigations.py
 │   │   │   ├── modules.py
 │   │   │   └── ws.py
@@ -113,6 +150,7 @@ argus/
 │   │   │   ├── hunter_io.py
 │   │   │   └── virustotal.py
 │   │   └── models/
+│   │       ├── system_config.py
 │   │       ├── investigation.py
 │   │       ├── target.py
 │   │       ├── job.py
