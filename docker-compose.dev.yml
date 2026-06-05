@@ -9,6 +9,11 @@ services:
     command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
     environment:
       DEBUG: "true"
+    deploy:
+      resources:
+        limits:
+          cpus: "1.5"
+          memory: 768M
 
   worker:
     build:
@@ -18,6 +23,15 @@ services:
     volumes:
       - ./src/api:/app/api
     command: celery -A api.tasks worker --loglevel=info
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1G
+    ulimits:
+      nproc:
+        soft: 256
+        hard: 512
 
   ui:
     build:
@@ -30,3 +44,8 @@ services:
     ports:
       - "3000:5173"
     command: npm run dev -- --host
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M

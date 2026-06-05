@@ -13,15 +13,43 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+    ulimits:
+      nofile:
+        soft: 1024
+        hard: 4096
 
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    # Enforce a hard memory ceiling so Redis does not silently grow unbounded.
+    # maxmemory-policy allkeys-lru evicts least-recently-used keys when the
+    # limit is reached — appropriate for a cache/broker workload.
+    command: >
+      redis-server
+      --maxmemory 128mb
+      --maxmemory-policy allkeys-lru
+      --save ""
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 192M
+        reservations:
+          cpus: "0.1"
+          memory: 64M
 
   api:
     build:
@@ -41,6 +69,18 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+    ulimits:
+      nofile:
+        soft: 4096
+        hard: 8192
 
   worker:
     build:
@@ -53,6 +93,24 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    deploy:
+      resources:
+        # Workers spawn subprocess tools (Sherlock, Holehe, Subfinder) which
+        # can be memory and CPU intensive when running concurrently.
+        limits:
+          cpus: "2.0"
+          memory: 1G
+        reservations:
+          cpus: "0.5"
+          memory: 256M
+    ulimits:
+      nofile:
+        soft: 4096
+        hard: 8192
+      # Prevent runaway subprocess forks from exhausting the host PID table.
+      nproc:
+        soft: 256
+        hard: 512
 
   ui:
     build:
@@ -63,6 +121,14 @@ services:
       - "3000:80"
     depends_on:
       - api
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 64M
+        reservations:
+          cpus: "0.05"
+          memory: 32M
 
 volumes:
   postgres_data:
