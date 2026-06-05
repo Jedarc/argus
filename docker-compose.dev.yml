@@ -1,0 +1,32 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+      target: development
+    volumes:
+      - ./src/api:/app/api
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+    environment:
+      DEBUG: "true"
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+      target: development
+    volumes:
+      - ./src/api:/app/api
+    command: celery -A api.tasks worker --loglevel=info
+
+  ui:
+    build:
+      context: .
+      dockerfile: docker/ui.Dockerfile
+      target: development
+    volumes:
+      - ./src/ui:/app
+      - /app/node_modules
+    ports:
+      - "3000:5173"
+    command: npm run dev -- --host
