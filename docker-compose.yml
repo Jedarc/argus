@@ -55,6 +55,7 @@ services:
     build:
       context: .
       dockerfile: docker/api.Dockerfile
+      target: production
     restart: unless-stopped
     env_file: .env
     ports:
@@ -86,6 +87,7 @@ services:
     build:
       context: .
       dockerfile: docker/worker.Dockerfile
+      target: production
     restart: unless-stopped
     env_file: .env
     depends_on:
@@ -116,6 +118,7 @@ services:
     build:
       context: .
       dockerfile: docker/ui.Dockerfile
+      target: production
     restart: unless-stopped
     ports:
       - "3000:80"

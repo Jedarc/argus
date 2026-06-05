@@ -49,13 +49,30 @@ Argus is an open-source OSINT platform that aggregates multiple intelligence sou
 ## Quick Start
 
 ```bash
-git clone https://github.com/Jedarc/argus
+git clone git@github.com:Jedarc/argus.git
 cd argus
 cp .env.example .env
-docker compose up
 ```
 
-The UI will be available at `http://localhost:3000`.
+Open `.env` and set the required values:
+
+```env
+POSTGRES_PASSWORD=choose-a-strong-password
+JWT_SECRET_KEY=generate-with: python3 -c "import secrets; print(secrets.token_hex(32))"
+
+# On a VPS, set this to your actual domain:
+ALLOWED_ORIGINS=https://your-domain.com
+```
+
+Then start everything:
+
+```bash
+docker compose up -d
+```
+
+Database migrations run automatically on startup. Open `http://localhost:3000` (or your domain), complete the one-time password setup, and you're in.
+
+Optional module keys (`HIBP_API_KEY`, `SHODAN_API_KEY`, etc.) can be left blank — their modules will be disabled until a key is provided in the Settings panel.
 
 ---
 
