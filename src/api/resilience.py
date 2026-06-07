@@ -1,10 +1,10 @@
 import functools
+import logging
 import signal
 from collections.abc import Callable
 from typing import TypeVar
 
 from tenacity import (
-    RetryError,
     before_sleep_log,
     retry,
     retry_if_exception_type,
@@ -12,9 +12,9 @@ from tenacity import (
     wait_exponential,
 )
 
-from api.logging_config import get_logger
-
-logger = get_logger(__name__)
+# before_sleep_log from tenacity requires a stdlib logger and an integer log level.
+# structlog is used everywhere else; this logger is only for tenacity's callback.
+_stdlib_logger = logging.getLogger(__name__)
 
 F = TypeVar("F", bound=Callable)
 
@@ -49,7 +49,7 @@ def with_retry(
             multiplier=1, min=wait_min_seconds, max=wait_max_seconds
         ),
         retry=retry_if_exception_type(transient_exceptions),
-        before_sleep=before_sleep_log(logger, "warning"),  # type: ignore[arg-type]
+        before_sleep=before_sleep_log(_stdlib_logger, logging.WARNING),
         reraise=True,
     )
 

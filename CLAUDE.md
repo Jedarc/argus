@@ -1,182 +1,129 @@
 # Argus — Claude Code Context
 
-> Read this file first. It contains all architectural decisions and conventions for this project.
+Self-hosted OSINT platform. FastAPI + Celery + PostgreSQL + React. Single-user, password-protected.
 
-## What is Argus?
-
-Argus is an open-source OSINT web platform. It aggregates multiple intelligence sources
-(HudsonRock, Sherlock, Holehe, Subfinder, HIBP, Shodan, etc.) into a single interface.
-Users create **investigations** with one or more **targets** (username, email, IP, domain, name).
-Modules run in background jobs with real-time WebSocket progress and persistent caching.
+---
 
 ## Current Status
 
-**Scaffolding complete. Implementation pending.**
+Scaffolding complete. Core infrastructure implemented. Feature endpoints pending.
 
-The following are fully defined and ready:
-- `docs/FEATURES.md` — complete feature spec
-- `docs/ARCHITECTURE.md` — stack, data model, directory structure
-- `docs/MODULES.md` — all 11 modules documented
-- `src/api/modules/base.py` — `BaseModule` and `ModuleResult` contracts
-- `src/api/modules/*.py` — all 11 module stubs (raise NotImplementedError)
-- `src/api/main.py` — FastAPI app skeleton
-- `src/api/database.py` — SQLAlchemy + session setup
-- `src/api/tasks.py` — Celery app setup
-- `docker-compose.yml` + `docker-compose.dev.yml` + `Makefile`
+**Implemented (ready to use):**
+- `src/api/security.py` — JWT + bcrypt + `require_authenticated_user` dependency
+- `src/api/validators.py` — input sanitization + SSRF protection
+- `src/api/resilience.py` — `@with_retry`, `@with_timeout`, `is_retryable_error`
+- `src/api/logging_config.py` — structlog, JSON in prod, colored in DEBUG
+- `src/api/models/` — all 6 SQLAlchemy models (system_config, investigation, target, job, result, module_config)
+- `src/api/modules/base.py` — `BaseModule` + `ModuleResult` contracts
+- `src/api/modules/*.py` — 11 module stubs (`raise NotImplementedError`)
+- `src/api/routers/auth.py` — endpoint stubs with Pydantic validation wired
+- Docker Compose, Dockerfiles, Alembic, React scaffold
 
-**What needs to be built next (in order):**
-1. SQLAlchemy models (`src/api/models/`) — including `system_config`
-2. Alembic migrations (`alembic init`, initial migration)
-3. Auth implementation (`src/api/routers/auth.py`) — bcrypt + JWT + cookie
-4. `require_authenticated_user` FastAPI dependency
-5. Module implementations (`src/api/modules/*.py`)
-6. Celery task for module execution (`src/api/tasks.py`)
-7. FastAPI routers (`src/api/routers/`)
-8. WebSocket progress hub (`src/api/routers/ws.py`)
-9. React UI (`src/ui/`) — including `/setup` and `/login` pages
-10. Dockerfiles (`docker/`)
+**Build order for next session:**
+1. Alembic initial migration (`make migration name=initial-schema`)
+2. Implement auth endpoints (`routers/auth.py` — all raise NotImplementedError)
+3. Implement modules one by one (start with `hudsonrock`, `sherlock`)
+4. Celery task (`tasks.py` — skeleton commented in the file)
+5. API routers (`investigations.py`, `modules.py`, `ws.py`)
+6. React UI pages (`/setup`, `/login`, `Dashboard`, `Investigation`, `Settings`)
+7. Dockerfiles polish (currently functional but minimal)
 
-## Tech Stack
+---
 
-| Component | Technology |
-|-----------|-----------|
-| Backend | FastAPI (Python 3.12) |
-| Task Queue | Celery + Redis |
-| Database | PostgreSQL 16 + SQLAlchemy + Alembic |
-| Real-time | WebSocket (FastAPI native) |
-| Frontend | React + Vite + Tailwind + shadcn/ui |
-| Containers | Docker + Docker Compose |
+## Non-Negotiable Rules
 
-## Module System
+1. **Every router on `app` requires `dependencies=[Depends(require_authenticated_user)]`** — except `/health` and `/auth/*`
+2. **Every target value from user input passes through `sanitize_target_value(type, value)`** before use
+3. **Subprocess calls use list-form args** — never f-string into a shell command
+4. **`password_hash` and `api_key_encrypted` never appear in any Pydantic response schema**
+5. **`ALLOWED_ORIGINS` must be set explicitly in `.env`** — default is for local dev only
 
-Each module lives in `src/api/modules/<name>.py` and extends `BaseModule`:
+---
+
+## Key Patterns
 
 ```python
-class BaseModule(ABC):
-    name: str
-    accepted_target_types: list[str]  # "username" | "email" | "ip" | "domain"
-    requires_api_key: bool
+# Protect a router
+app.include_router(router, prefix="/api/v1", dependencies=[Depends(require_authenticated_user)])
 
-    def run(self, target_value: str, api_key: str | None = None) -> ModuleResult: ...
+# Validate user input
+from api.validators import sanitize_target_value
+clean = sanitize_target_value("email", raw_email)
+
+# Resilient module
+from api.resilience import with_retry, with_timeout
+@with_timeout(seconds=60)
+@with_retry(max_attempts=3, wait_min_seconds=1, wait_max_seconds=30)
+def run(self, target_value, api_key=None): ...
+
+# Structured log
+from api.logging_config import get_logger
+log = get_logger(__name__).bind(module="hudsonrock", target=target_value)
+log.info("module_started")
+log.error("module_failed", error=str(exc), exc_info=True)
+
+# WebSocket auth (token passed as ?token=<jwt>)
+from api.security import require_authenticated_user_ws
+require_authenticated_user_ws(token=token, database_session=session)
 ```
 
-`ModuleResult` has: `found: bool`, `data: dict`, `error: str | None`, `cached: bool`.
+---
 
-All modules are registered in `src/api/modules/__init__.py` as `ALL_MODULES`.
+## Auth Flow
 
-## Authentication
+1. First request → `403 {"setup_required": true}` if no password set → UI redirects to `/setup`
+2. `POST /auth/setup` → bcrypt hash stored in `system_config` → endpoint returns 404 forever after
+3. `POST /auth/login` → JWT in httpOnly + Secure + SameSite=Strict cookie
+4. Password change → `token_version` incremented → all sessions immediately invalid
 
-Single-user, password-only. Designed for self-hosted VPS deployments.
-
-**Flow:**
-1. First request to any protected route → `403 {"setup_required": true}` if no password is set
-2. UI redirects to `/setup` → `POST /auth/setup` stores bcrypt hash in `system_config` → disabled forever after
-3. `POST /auth/login {"password": "..."}` → JWT returned as httpOnly + Secure + SameSite=Strict cookie
-4. FastAPI dependency `require_authenticated_user` guards all routes except `/health`, `/auth/*`
-5. WebSocket auth via `?token=<jwt>` query param (httpOnly cookie not available on WS upgrade)
-6. Password change increments `token_version` in `system_config` → all existing tokens immediately invalid
-
-**Key:** `JWT_SECRET_KEY` in `.env` (never hardcode). `JWT_EXPIRY_HOURS` controls session length.
-
-**Files:**
-- `src/api/routers/auth.py` — all auth endpoints (stubs, raise NotImplementedError)
-- `src/api/models/system_config.py` — stores `password_hash` and `token_version` rows
+---
 
 ## Data Model
 
 ```
-system_config   (key PK, value, updated_at)           ← password_hash, token_version
-investigations  (id, name, notes, status, created_at)
+system_config   (key, value)                      ← password_hash, token_version
+investigations  (id, name, notes, status)
 targets         (id, investigation_id, type, value)
 jobs            (id, investigation_id, target_id, module, status, started_at, finished_at, error)
 results         (id, job_id, module, target_type, target_value, raw_json, found, cached, timestamp)
 module_configs  (module, enabled, api_key_encrypted, cache_ttl_seconds)
 ```
 
-Cache key: `(module, target_type, target_value)` — results are reused across investigations.
+Cache key: `(module, target_type, target_value)` — index on `results` table.
+
+---
 
 ## Commit Convention
 
-**Phased commits — one logical unit per commit. Never bundle unrelated changes.**
+Phased commits — one unit per commit. Never bundle unrelated changes.
 
 ```
 <type>(<scope>): <description>
-
-Types:  feat | fix | refactor | test | docs | chore | style
+Types:  feat | fix | refactor | test | docs | chore
 Scopes: api | worker | ui | db | modules | docker | docs
 ```
 
-Examples:
-```
-feat(db): add investigation and target models
-feat(db): add job and result models with cache index
-feat(modules): implement hudsonrock module
-feat(api): add POST /investigations endpoint
-feat(worker): wire module execution to celery task
-feat(ui): add investigation list page
-```
+Phases per feature: `db` model → `api` business logic → `api` endpoint → `ui` → `test` → `docs`
 
-Phases per feature: data model → business logic → API layer → UI → tests → docs.
+---
 
-## Security Architecture
-
-### Key files
-- `src/api/security.py` — **IMPLEMENTED**: JWT creation/validation, bcrypt helpers, `require_authenticated_user` and `require_authenticated_user_ws` dependencies
-- `src/api/validators.py` — **IMPLEMENTED**: `sanitize_target_value()`, `validate_password_strength()`, SSRF-blocking IP list
-- `src/api/main.py` — **IMPLEMENTED**: `SecurityHeadersMiddleware`, CORS, rate limiting, OpenAPI gating
-
-### Rules that must never be broken
-1. **Every router registered on `app` must use `dependencies=[Depends(require_authenticated_user)]`** except `/health` and `/auth/*`
-2. **Every target value from user input must pass through `sanitize_target_value(target_type, value)` before use**
-3. **Subprocess calls in modules must use `shlex.quote()` or list-form args** — never f-string into a shell command
-4. **`password_hash` and `api_key_encrypted` fields must never appear in any Pydantic response schema**
-5. **SSRF**: modules that perform HTTP requests to user-supplied IPs/domains must call `_assert_not_private_ip()` before the request — the validator handles this for stored targets but modules must also guard direct calls
-6. **CORS `ALLOWED_ORIGINS` must be set explicitly in `.env`** — the default `http://localhost:3000` is for local dev only
-
-### Auth dependency usage
-```python
-# Protect an entire router:
-app.include_router(router, dependencies=[Depends(require_authenticated_user)])
-
-# Protect a single endpoint:
-@router.get("/endpoint", dependencies=[Depends(require_authenticated_user)])
-
-# WebSocket (token passed as ?token=<jwt> query param):
-from api.security import require_authenticated_user_ws
-require_authenticated_user_ws(token=token, database_session=session)
-```
-
-## Code Conventions
-
-- **No abbreviations**: `target_value` not `val`, `database_session` not `db`, `api_key` not `key`
-- **Guard clauses** over nested if-else (early return pattern)
-- **No comments** unless the WHY is non-obvious
-- **No hardcoded secrets** — environment variables only
-- API keys stored encrypted (Fernet) — never returned to frontend raw
-- All containers run as non-root
-
-## Key Commands
+## Commands
 
 ```bash
-make dev       # start with hot reload
-make migrate   # run alembic upgrade head
-make test      # pytest
-make lint      # ruff check + format check
-make shell     # bash into api container
+make dev                          # hot reload
+make test                         # pytest
+make lint                         # ruff check + format check
+make migration name=<description> # generate migration
+make migrate                      # apply migrations
+make shell                        # bash into api container
 ```
+
+---
 
 ## Environment
 
-Copy `.env.example` to `.env` before starting. Optional module keys:
-`HIBP_API_KEY`, `SHODAN_API_KEY`, `HUNTER_API_KEY`, `VT_API_KEY`.
+Required: `POSTGRES_PASSWORD`, `JWT_SECRET_KEY`
+Optional modules: `HIBP_API_KEY`, `SHODAN_API_KEY`, `HUNTER_API_KEY`, `VT_API_KEY`
+Celery uses Redis DB `/1` (broker) and `/2` (results) — isolated from app data on `/0`.
 
-## Important Files
-
-| File | Purpose |
-|------|---------|
-| `docs/FEATURES.md` | Full feature spec — read before adding features |
-| `docs/ARCHITECTURE.md` | Stack decisions and directory layout |
-| `docs/MODULES.md` | Each module's inputs, outputs, TTL, dependencies |
-| `src/api/modules/base.py` | Module contract — do not change without updating all modules |
-| `DISCLAIMER.md` | Legal disclaimer — this is an OSINT security tool |
-| `CONTRIBUTING.md` | Commit convention and phased development rules |
+→ Full docs: [docs/FEATURES.md](docs/FEATURES.md) · [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · [docs/MODULES.md](docs/MODULES.md)
